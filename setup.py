@@ -8,7 +8,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 lib_path = os.path.dirname(os.path.realpath(__file__))
 requirements_path = os.path.join(lib_path, 'requirements.txt')
 with open(requirements_path) as f:
-    install_requires = f.read().splitlines()
+    install_requires = [line.strip() for line in f.read().splitlines() if line.strip() and not line.startswith('#')]
 
 setuptools.setup(
     name="minervachem",
@@ -31,4 +31,7 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     python_requires='<3.12',
     install_requires=install_requires,
+    extras_require={
+        'mpi': ['mpi4py>=4.0.0']
+    },
 )
