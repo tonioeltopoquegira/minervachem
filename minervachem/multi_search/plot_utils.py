@@ -992,3 +992,425 @@ def plot_pareto_vs_spin_from_experiment(
         plt.show()
 
     return fig
+
+
+# ======================================================================
+# Feature Space Visualization (moved from visualize_feature_space.py)
+# ======================================================================
+
+import hashlib
+import pandas as pd
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
+from scipy.stats import gaussian_kde
+import joblib
+import scipy.sparse
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.manifold import TSNE
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.cm import ScalarMappable
+
+# Optional imports (only needed for visualize_feature_space_evolution):
+# These will be imported inside the function to avoid requiring them
+# if the functions are not used
+# from umap import UMAP
+# from rdkit import Chem
+# from minervachem.fingerprinters import GraphletFingerprinter
+# from minervachem.transformers import FingerprintFeaturizer
+# from .dataset.datastorage import Dataset
+# from .models_performance import parse_result_string_safe, pad_or_truncate_result
+
+
+# ======================================================================
+# Cache helpers
+# ======================================================================
+CACHE_DIR = ".visualize_cache"
+
+
+def _hash(*parts) -> str:
+    tag = "|".join(str(p) for p in parts)
+    return hashlib.md5(tag.encode()).hexdigest()[:12]
+
+
+# ---------- fingerprint matrix (X) + metadata ----------
+
+def _feat_cache_path(experiment_folder: str, featurizer_max_len: int,
+                     seed: int, target_idx: int) -> str:
+    key = _hash(os.path.abspath(experiment_folder), featurizer_max_len, seed, target_idx)
+    return os.path.join(CACHE_DIR, f"features_{key}.joblib")
+
+
+def _save_features(path: str, X: np.ndarray, generations: np.ndarray,
+                   valid_results: list, returned_smiles: list) -> None:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    joblib.dump({
+        "X":               scipy.sparse.csr_matrix(X),  # sparse keeps file small
+        "generations":     generations,
+        "valid_results":   valid_results,
+        "returned_smiles": returned_smiles,
+    }, path, compress=3)
+    print(f"[CACHE] Saved fingerprint matrix  → {path}")
+
+
+def _load_features(path: str):
+    if not os.path.exists(path):
+        return None
+    payload = joblib.load(path)
+    X = payload["X"].toarray() if scipy.sparse.issparse(payload["X"]) else payload["X"]
+    print(f"[CACHE] Loaded fingerprint matrix ← {path}")
+    return X, payload["generations"], payload["valid_results"], payload["returned_smiles"]
+
+
+# ---------- 2-D embedding ----------
+
+def _emb_cache_path(experiment_folder: str, featurizer_max_len: int,
+                    reducer: str, seed: int, target_idx: int) -> str:
+    key = _hash(os.path.abspath(experiment_folder), featurizer_max_len, reducer, seed, target_idx)
+    return os.path.join(CACHE_DIR, f"embedding_{key}.npz")
+
+
+def _save_embedding(path: str, embedding: np.ndarray) -> None:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    np.savez_compressed(path, embedding=embedding)
+    print(f"[CACHE] Saved embedding  → {path}")
+
+
+def _load_embedding(path: str):
+    if not os.path.exists(path):
+        return None
+    print(f"[CACHE] Loaded embedding ← {path}")
+    return np.load(path)["embedding"]
+
+
+# ======================================================================
+# Generation reconstruction
+# ======================================================================
+
+def reconstruct_generations(df):
+    """Recover generation indices: gen0=600, subsequent chunks=1000."""
+    n = len(df)
+    gens, count, gen = [], 0, 0
+    while count < n:
+        chunk = min(600 if gen == 0 else 1000, n - count)
+        gens.extend([gen] * chunk)
+        count += chunk
+        gen += 1
+    return gens
+
+
+# ======================================================================
+# Distribution plot
+# ======================================================================
+
+def plot_generation_distributions(
+    embedding: np.ndarray,
+    generations: np.ndarray,
+    generation_ranges: list[tuple[int | None, int | None]],
+    reducer: str = "umap",
+    output_folder: str = "final_figures",
+    grid_size: int = 200,
+    percentiles: tuple[float, ...] = (25, 50, 75),
+    bandwidth_scale: float = 1.0,
+    alpha_fill: float = 0.15,
+    figsize: tuple[int, int] = (9, 7),
+    label_prefix: str = "gen",
+):
+    """
+    Plot 2D kernel-density contours (at given percentile levels) for subsets
+    of molecules defined by generation ranges.
+
+    Parameters
+    ----------
+    embedding : (N, 2) array   – 2-D reduced coordinates.
+    generations : (N,) array   – integer generation index per molecule.
+    generation_ranges : list of (lo, hi)
+        (None, 10)   -> generation <= 10
+        (20, None)   -> generation >= 20
+        (5,  15)     -> 5 <= generation <= 15
+        (None, None) -> all molecules
+    """
+    light_green = "#66bb6a"   # same family as earlier greens
+    dark_blue   = "#0b3c5d"   # deep navy, strong contrast # deep blue   # deep forest green
+    line_styles = [":",       "--",      "-"]     # 25th -> 50th -> 75th
+    line_widths = [1.0,       1.5,       2.0]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    margin = 0.05
+    x_min, x_max = embedding[:, 0].min(), embedding[:, 0].max()
+    y_min, y_max = embedding[:, 1].min(), embedding[:, 1].max()
+    x_pad = (x_max - x_min) * margin
+    y_pad = (y_max - y_min) * margin
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    xi = np.linspace(x_min - x_pad, x_max + x_pad, grid_size)
+    yi = np.linspace(y_min - y_pad, y_max + y_pad, grid_size)
+    Xi, Yi = np.meshgrid(xi, yi)
+    grid_coords = np.vstack([Xi.ravel(), Yi.ravel()])
+
+    legend_handles = []
+
+    for idx, (lo, hi) in enumerate(generation_ranges):
+        mask = np.ones(len(generations), dtype=bool)
+        if lo is not None:
+            mask &= generations >= lo
+        if hi is not None:
+            mask &= generations <= hi
+
+        pts = embedding[mask]
+        if len(pts) < 10:
+            print(f"[WARN] Range ({lo}, {hi}) has only {len(pts)} points – skipping.")
+            continue
+
+        color = light_green if idx % 2 == 0 else dark_blue
+
+        kde = gaussian_kde(pts.T, bw_method="scott")
+        kde.set_bandwidth(kde.factor * bandwidth_scale)
+        Z = kde(grid_coords).reshape(grid_size, grid_size)
+
+        # Mass-enclosing iso-density levels
+        Z_sorted  = np.sort(Z.ravel())[::-1]
+        Z_cumsum  = np.cumsum(Z_sorted) / np.sum(Z_sorted)
+        level_values = sorted({
+            float(Z_sorted[min(np.searchsorted(Z_cumsum, p / 100.0), len(Z_sorted) - 1)])
+            for p in sorted(percentiles)
+        })
+
+        ax.contourf(xi, yi, Z,
+                    levels=[level_values[0], Z.max() * 1.01],
+                    colors=[color], alpha=alpha_fill)
+
+        for lv, ls, lw in zip(level_values, line_styles, line_widths):
+            ax.contour(xi, yi, Z, levels=[lv],
+                       colors=[color], linestyles=[ls], linewidths=[lw], alpha=0.9)
+
+        if lo is None and hi is None:
+            label = "all generations"
+        elif lo is None:
+            label = f"{label_prefix} <= {hi}"
+        elif hi is None:
+            label = f"{label_prefix} >= {lo}"
+        else:
+            label = f"{label_prefix} {lo}-{hi}"
+
+        legend_handles.append(mpatches.Patch(facecolor=color, alpha=0.6, label=label))
+
+    for p, ls, lw in zip(sorted(percentiles), line_styles, line_widths):
+        legend_handles.append(
+            Line2D([], [], color="gray", linestyle=ls, linewidth=lw,
+                   label=f"{p}th percentile")
+        )
+
+    ax.legend(handles=legend_handles, loc="best", framealpha=0.85, fontsize=9)
+    ax.set_title(f"Molecule distribution by generation ({reducer.upper()})",
+                 fontsize=13, fontweight="bold")
+    ax.set_xlabel("Component 1")
+    ax.set_ylabel("Component 2")
+
+    os.makedirs(output_folder, exist_ok=True)
+    ranges_str = "_vs_".join(
+        f"{lo or 'start'}-{hi or 'end'}" for lo, hi in generation_ranges
+    )
+    out_path = os.path.join(output_folder, f"gen_distributions_{reducer}_{ranges_str}.png")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    print(f"[INFO] Saved distribution plot -> {out_path}")
+    plt.close()
+    return out_path
+
+
+# ======================================================================
+# Main entry-point
+# ======================================================================
+
+def visualize_feature_space_evolution(
+    experiment_folder: str,
+    featurizer_max_len: int = 5,
+    reducer: str = "umap",          # "pca" | "umap" | "tsne"
+    n_components: int = 2,
+    seed: int = 0,
+    target_idx: int = 0,
+    distribution_ranges: list[tuple[int | None, int | None]] | None = None,
+):
+    """
+    Visualizes how the explored molecular space evolves across generations.
+
+    Two-level disk cache under .visualize_cache/:
+    -----------------------------------------------
+    1. features_<hash>.joblib  – fingerprint matrix X + generations + results
+       Hash depends on: experiment_folder, featurizer_max_len, seed, target_idx
+       Re-used across all reducer choices.
+
+    2. embedding_<hash>.npz    – 2-D coordinates for one reducer/seed combo
+       Hash depends on: all of the above + reducer
+       Re-used across repeated plotting calls with the same reducer.
+
+    On a warm cache the only work done is loading the .npz and drawing plots.
+
+    Parameters
+    ----------
+    distribution_ranges : list of (lo, hi) tuples, optional
+        e.g. [(None, 10), (20, None)]  ->  "gen <= 10" vs "gen >= 20"
+    """
+    # Import optional dependencies only when this function is called
+    from umap import UMAP
+    from rdkit import Chem
+    from minervachem.fingerprinters import GraphletFingerprinter
+    from minervachem.transformers import FingerprintFeaturizer
+    from .dataset.datastorage import Dataset
+    from .models_performance import parse_result_string_safe, pad_or_truncate_result
+
+    # ------------------------------------------------------------------
+    # Stage 1 – Featurization  (slow; cached per dataset + featurizer)
+    # ------------------------------------------------------------------
+    feat_path = _feat_cache_path(experiment_folder, featurizer_max_len, seed, target_idx)
+    cached    = _load_features(feat_path)
+
+    if cached is not None:
+        X, generations, valid_results, returned_smiles = cached
+    else:
+        print("[INFO] Running featurization – this is the slow step, cached afterwards.")
+
+        csv_path = os.path.join(experiment_folder, "query_runs.csv")
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"Cannot find {csv_path}")
+
+        df = pd.read_csv(csv_path)
+        df["generation"]    = reconstruct_generations(df)
+        df["parsed_results"] = df["result"].apply(parse_result_string_safe)
+        df["parsed_results"] = df["parsed_results"].apply(
+            lambda x: pad_or_truncate_result(x, max(target_idx + 1, len(x)))
+        )
+
+        fingerprinter = GraphletFingerprinter(max_len=featurizer_max_len)
+        featurizer    = FingerprintFeaturizer(fingerprinter=fingerprinter, verbose=0, n_jobs=1)
+        dataset       = Dataset(seed=seed, standardize=False, featurizer=featurizer)
+
+        valid_records = []
+        for _, row in df.iterrows():
+            if Chem.MolFromSmiles(row["smiles"]) is not None:
+                valid_records.append({
+                    "smiles":         row["smiles"],
+                    "generation":     row["generation"],
+                    "parsed_results": row["parsed_results"],
+                })
+
+        valid_mol_dicts = [
+            {"smiles": r["smiles"], "result": r["parsed_results"]} for r in valid_records
+        ]
+
+        X, Y, smiles_out = dataset.prepare_batch(
+            smiles=valid_mol_dicts,
+            all_properties=valid_mol_dicts,
+            target_indices=[target_idx],
+            verbose=False,
+        )
+
+        returned_smiles = [
+            s.get("new_smiles", s.get("smiles")) if isinstance(s, dict) else s
+            for s in smiles_out
+        ]
+
+        gen_map = {r["smiles"]: r["generation"]     for r in valid_records}
+        res_map = {r["smiles"]: r["parsed_results"]  for r in valid_records}
+
+        generations   = np.array([gen_map.get(s) for s in returned_smiles])
+        valid_results = [res_map.get(s) for s in returned_smiles]
+
+        X = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+
+        _save_features(feat_path, X, generations, valid_results, returned_smiles)
+
+    # ------------------------------------------------------------------
+    # Stage 2 – Dimensionality reduction  (cached per reducer + seed)
+    # ------------------------------------------------------------------
+    emb_path  = _emb_cache_path(experiment_folder, featurizer_max_len, reducer, seed, target_idx)
+    embedding = _load_embedding(emb_path)
+
+    if embedding is None:
+        print(f"[INFO] Running {reducer.upper()} – cached after this run.")
+        if reducer.lower() == "pca":
+            X_scaled  = StandardScaler(with_mean=False).fit_transform(X)
+            embedding = PCA(n_components=n_components,
+                            random_state=seed).fit_transform(X_scaled)
+        elif reducer.lower() == "tsne":
+            embedding = TSNE(n_components=n_components,
+                             random_state=seed, perplexity=30).fit_transform(X)
+        elif reducer.lower() == "umap":
+            embedding = UMAP(n_components=n_components, random_state=seed,
+                             n_neighbors=15, min_dist=0.1).fit_transform(X)
+        else:
+            raise ValueError("reducer must be one of ['pca', 'umap', 'tsne']")
+        _save_embedding(emb_path, embedding)
+    else:
+        print(f"[INFO] {reducer.upper()} embedding loaded from cache – skipping reduction.")
+
+    # ------------------------------------------------------------------
+    # Stage 3 – Scatter plot coloured by generation
+    # ------------------------------------------------------------------
+    n_gen_max  = int(np.max(generations))
+    cmap       = LinearSegmentedColormap.from_list(
+                     "green_black", ["#00cc00", "#000000"], N=n_gen_max + 1)
+    norm       = Normalize(vmin=0, vmax=n_gen_max)
+    colors     = cmap(norm(generations))
+    plot_order = np.argsort(-generations)   # latest generation on top
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.scatter(embedding[plot_order, 0], embedding[plot_order, 1],
+               c=colors[plot_order], alpha=0.7, s=20)
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, label="Generation")
+    ax.set_title(f"Exploration trajectory in feature space ({reducer.upper()})")
+    ax.set_xlabel("Component 1")
+    ax.set_ylabel("Component 2")
+    plt.tight_layout()
+    os.makedirs("final_figures", exist_ok=True)
+    scatter_path = os.path.join("final_figures", f"feature_space_{reducer}.png")
+    plt.savefig(scatter_path, dpi=300)
+    print(f"[INFO] Saved scatter plot -> {scatter_path}")
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # Stage 4 – Scatter plot coloured by property value
+    # ------------------------------------------------------------------
+    y = np.array([
+        float(r[target_idx])
+        if (r and len(r) > target_idx and r[target_idx] is not None)
+        else np.nan
+        for r in valid_results
+    ], dtype=float)
+
+    y_ord      = y[plot_order]
+    valid_mask = ~np.isnan(y_ord)
+    emb_ord    = embedding[plot_order]
+
+    plt.figure(figsize=(8, 6))
+    sc = plt.scatter(emb_ord[valid_mask, 0], emb_ord[valid_mask, 1],
+                     c=y_ord[valid_mask], cmap="coolwarm", alpha=0.7, s=25)
+    plt.colorbar(sc, label=f"Property {target_idx}")
+    plt.title(f"Feature space coloured by property {target_idx}")
+    plt.xlabel("Component 1")
+    plt.ylabel("Component 2")
+    plt.tight_layout()
+    prop_path = os.path.join("final_figures",
+                              f"feature_space_property{target_idx}_{reducer}.png")
+    plt.savefig(prop_path, dpi=300)
+    print(f"[INFO] Saved property plot -> {prop_path}")
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # Stage 5 – KDE distribution plot (optional)
+    # ------------------------------------------------------------------
+    if distribution_ranges is not None:
+        plot_generation_distributions(
+            embedding=embedding,
+            generations=generations,
+            generation_ranges=distribution_ranges,
+            reducer=reducer,
+            output_folder="final_figures",
+        )
+
+    return embedding, valid_results

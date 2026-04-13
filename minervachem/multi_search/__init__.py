@@ -13,6 +13,9 @@ except ImportError:
         stacklevel=2
     )
 
+# Import plot_utils directly (doesn't require MPI)
+from . import plot_utils
+
 # Core pipeline functions - will be lazily imported when needed
 def __getattr__(name):
     """Lazy loading of multi_search components with helpful error messages."""
@@ -50,9 +53,6 @@ def __getattr__(name):
     elif name == "models_performance":
         from . import models_performance
         return models_performance
-    elif name == "plot_utils":
-        from . import plot_utils
-        return plot_utils
     
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
