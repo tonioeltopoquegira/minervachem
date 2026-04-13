@@ -159,7 +159,42 @@ draw_projected_coefs(dags,
 ![Hierarhcical model interpretation](demos/hmodel_interp.png)
 
 
-## Citation 
+## Multi-objective Search
+
+The `minervachem.multi_search` module provides meta-learning-enhanced multi-objective molecular search capabilities. It combines:
+
+- **Meta Learning**: meta-learning graphlet surrogates for improved generalization under data-scarcity. 
+- **Active Learning**: Intelligently selects molecules using Bayesian Bootstrapping and acquisition functions (EI, PI, UCB)
+- **Multi-Objective Optimization**: Maintains and improves Pareto fronts across multiple chemical properties
+- **Parallel Evaluation**: MPI-distributed structure generation and property evaluation
+
+### Installation with MPI support
+
+The multi-search module requires MPI (Message Passing Interface) support. Install with:
+
+```bash
+# Using the mpi extra (requires system MPI)
+pip install 'minervachem[mpi]'
+
+# Or manually install mpi4py with your system MPI
+pip install mpi4py
+```
+
+For conda environments:
+```bash
+conda install -c conda-forge mpi4py
+```
+
+### Usage
+
+Applications includes two example searches:
+- **QM9 Dataset**: Toy electronic and thermal property optimization in a knwon offline benchmark
+- **SCO Systems**: Real-world online spin-crossover coordination complex search with solvation and electronic properties using Architector
+
+See `minervachem/multi_search/README.md` for detailed documentation and `demos/multi_search/` for example scripts and notebooks.
+
+
+## Citations 
 If you use minervachem in your work, please cite [our paper](https://doi.org/10.26434/chemrxiv-2024-r81c8)
 
 ```latex
@@ -172,6 +207,8 @@ If you use minervachem in your work, please cite [our paper](https://doi.org/10.
   year={2024}
 }
 ```
+
+If yoy use minervachem for multi-objective search cite XYZ
 
 ## Copyright and licensing
 
