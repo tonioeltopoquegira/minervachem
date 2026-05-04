@@ -61,6 +61,7 @@ python -c "import numpy; print('numpy:', numpy.__version__); import fairchem; im
 
 ### Running the QM9 experiment
 
+QM9 evaluations correspond to a look-up in a table
 ```bash
 # Quick test
 mpirun -n 4 python demos/multi_search/experiment_qm9.py --seed 2 --n_generations 5
@@ -68,9 +69,9 @@ mpirun -n 4 python demos/multi_search/experiment_qm9.py --seed 2 --n_generations
 # Full QM9 run
 mpirun -n 4 python demos/multi_search/experiment_qm9.py --n_generations 50 --n_samples 10 --seed 0
 
+```
+To run Architector experiment it is necessary to have access to an HPC system
+```bash
 # Full SCO run
 mpirun -n 4 python demos/multi_search/experiment_sco.py --n_generations 50 --n_samples 10 --seed 0
 ```
-
-See `examples/README.md` for detailed examples and usage.
-
