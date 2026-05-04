@@ -99,7 +99,7 @@ def parallel_sample_batching(n, pareto=None, seed=42, candidates_comp=None, func
             key = (
                 c["smiles"],
                 tuple(c["coordList"]),
-                normalize_functionalization(c.get("functionalization", []))
+                normalize_functionalization(c.get("functionalizations", []))
             )
             if key not in seen:
                 seen.add(key)

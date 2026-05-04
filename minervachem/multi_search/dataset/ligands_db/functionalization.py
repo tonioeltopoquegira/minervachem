@@ -68,7 +68,7 @@ def functionalize(orig_mol_smiles, inds_to_keep=(0,), positions_to_functionalize
         'smiles': orig_mol_smiles,
         'new_smiles': new_smiles,
         'coordList': inds_to_keep,
-        'functionalization': fgs
+        'functionalizations': fgs
     }
 
 
@@ -88,7 +88,7 @@ def mpi_sample_batch_worker(args):
         key = (
             candidate["smiles"],
             tuple(candidate["coordList"]),
-            normalize_functionalization(candidate.get("functionalization", []))
+            normalize_functionalization(candidate.get("functionalizations", []))
         )
 
         if key not in seen_keys and key not in local_seen:
@@ -182,7 +182,7 @@ def sample_single_candidate(n_samples: int, pareto=None, functionalization=0,
                 point['SMILES'],
                 inds_to_keep=point.get('coordList', []),
                 positions_to_functionalize=functionalization,
-                existing_functionalization=point.get('functionalization', [])
+                existing_functionalization=point.get('functionalizations', [])
             )
             group = "B"
         else:
@@ -199,7 +199,7 @@ def sample_single_candidate(n_samples: int, pareto=None, functionalization=0,
                 'smiles': result['smiles'],
                 'new_smiles': result['new_smiles'],
                 'coordList': point['coordList'],
-                'functionalization': result['functionalization'],
+                'functionalizations': result['functionalizations'],
                 'group': group
             }
         else:
@@ -212,7 +212,7 @@ def sample_single_candidate(n_samples: int, pareto=None, functionalization=0,
     coord_raw = row['lig_bind_inds']
     coord = ast.literal_eval(coord_raw) if isinstance(coord_raw, str) else coord_raw
 
-    functionalization = row.get('functionalization', [])
+    functionalization = row.get('functionalizations', [])
     if isinstance(functionalization, str):
         try:
             functionalization = ast.literal_eval(functionalization)
@@ -223,7 +223,7 @@ def sample_single_candidate(n_samples: int, pareto=None, functionalization=0,
         'smiles': row['lig_smiles'],
         'new_smiles': row['lig_smiles'],
         'coordList': coord,
-        'functionalization': functionalization,
+        'functionalizations': functionalization,
         'group': 'A'
     }
 
@@ -247,7 +247,7 @@ def sample(n, pareto=None, seed=None, candidates_comp=None, functionalization=No
         key = (
             candidate["smiles"],
             tuple(candidate["coordList"]),
-            normalize_functionalization(candidate.get("functionalization", []))
+            normalize_functionalization(candidate.get("functionalizations", []))
         )
 
         if key not in candidates_comp and key not in seen:

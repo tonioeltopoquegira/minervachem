@@ -13,13 +13,6 @@ from ..dataset.datastorage import cluster_centroids
 from mpi4py import MPI
 import random
 
-
-# CHECK
-# https://link.springer.com/chapter/10.1007/978-3-031-75623-8_4
-# http://proceedings.mlr.press/v48/hernandez-lobatoa16.html
-
-# File contains class for the expected improvement multi-objective optimiz
-
 '''
 @register_mpi_function("evaluate_ei_chunk")
 def evaluate_ei_chunk(args):
@@ -316,7 +309,7 @@ class EGO:
             self.select_B = -1
 
         # Optional clustering on the selected set
-        if cluster is not None:
+        if cluster is not None or cluster > 1:
             if verbose:
                 print(f'Clustering the {len(selected)} into {retain} centroids (X{cluster} decrease)', flush=True)
             t = time.time()

@@ -143,7 +143,7 @@ def NDchemicalsearch(name, target_names,
         print(f"[NOT PARALLEL] evaluating mcmc {time.time() - t}s", flush=True)
 
         
-        selected_smiles, ind = ego.select(ei, sampled_smiles, retain=retain, random_sample=random_sample, cluster=cluster_size, X=X, save_path=folder_path)
+        selected_smiles, ind = ego.select(ei, sampled_smiles, retain=retain, random_sample=random_sample, cluster=retain, X=X, save_path=folder_path)
 
        
 
@@ -201,7 +201,7 @@ def NDchemicalsearch(name, target_names,
             
     
 
-if __name__ == '__main__':
+'''if __name__ == '__main__':
 
     targets =[0, 1, 2, 3]
 
@@ -240,4 +240,4 @@ if __name__ == '__main__':
     else:
         # Workers must enter mpi_map's worker path
         # This dummy call ensures they block and receive work
-        mpi_worker_loop()
+        mpi_worker_loop()'''

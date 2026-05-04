@@ -21,6 +21,7 @@ def arch(lig, task_dict={
     good = True
     error = ''
     output_dict = dict()
+    # print(f"[ARCH] Starting for {lig.get('smiles', 'unknown')}", flush=True)
     if task_dict.get('sco', False):
         arch_out = dict()
         nlig = int(6/len(lig['coordList']))
@@ -36,66 +37,72 @@ def arch(lig, task_dict={
         }
         arch_mol = None
         try:
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}] Building Complex', flush=True)
+            # print(f"[ARCH] Building complex with {len(lig['coordList'])} ligands", flush=True)
+            # print(f"[ARCH] Input: metal=Fe, nlig={nlig}, coordList={lig['coordList']}", flush=True)
             t_cal = time.time()
             arch_out = build_complex(architector_input)
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}] Building Complex in {time.time()-t_cal}', flush=True)
+            # print(f"[ARCH] build_complex completed in {time.time()-t_cal:.2f}s", flush=True)
+            # print(f"[ARCH] arch_out type: {type(arch_out)}, len: {len(arch_out) if arch_out else 0}", flush=True)
 
-            if arch_out:
+            if arch_out and len(arch_out) > 0:
+                # print(f"[ARCH] arch_out keys: {list(arch_out.keys())}", flush=True)
                 key = list(arch_out.keys())[0]
                 arch_mol = convert_io_molecule(arch_out[key]['mol2string'])
                 output_dict['architector_uff_mol2'] = arch_out[key]['mol2string']
+                # print(f"[ARCH] Successfully converted structure", flush=True)
             else:
                 good = False
-                error += "Failed to build complex. "
+                error += "Failed to build complex - empty output. "
+                # print(f"[ARCH] arch_out is empty or None!", flush=True)
+                # print(f"[ARCH] arch_out value: {arch_out}", flush=True)
         except Exception as e:
             good = False
             error += str(e)
+            # print(f"[ARCH] Exception during complex building: {type(e).__name__}: {e}", flush=True)
+            # import traceback
+            # print(f"[ARCH] Traceback:\n{traceback.format_exc()}", flush=True)
 
         if len(arch_out) == 0:
             good = False
             error += 'Architector produced no output.'
         else:
+            # print(f"[ARCH] Starting LS/HS calculations", flush=True)
             mol = convert_io_molecule(arch_mol)
             mol.uhf = 0
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}]  Relaxing LS Complex', flush=True)
+            # print(f"[ARCH] Running low-spin OMOL calculation...", flush=True)
             t_cal = time.time()
             low_spin = CalcExecutor(mol, method='omol', relax=True, fmax=0.05)
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}] LS complex in {time.time()-t_cal}', flush=True)
-
-            
+            # print(f"[ARCH] LS completed in {time.time()-t_cal:.2f}s, successful={low_spin.successful}", flush=True)
 
             if low_spin.successful:
                 output_dict['low_spin_mol2_omol'] = low_spin.mol.write_mol2('ls',writestring=True)
+                # print(f"[ARCH] LS energy: {low_spin.energy:.4f}", flush=True)
             else:
                 error += 'low spin omol failed'
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}] Relaxing HS Complex', flush=True)
-            
+                # print(f"[ARCH] LS failed", flush=True)
+
+            # print(f"[ARCH] Running high-spin OMOL calculation...", flush=True)
             mol = convert_io_molecule(arch_mol)
             t_cal = time.time()
             high_spin = CalcExecutor(mol, method='omol', relax=True, fmax=0.05)
-            if debug_time:
-                print(f'[RANK rank - {lig['smiles']}] HS complex in {time.time()-t_cal}', flush=True)
+            # print(f"[ARCH] HS completed in {time.time()-t_cal:.2f}s, successful={high_spin.successful}", flush=True)
 
-            
             if high_spin.successful:
                 output_dict['high_spin_mol2_omol'] = high_spin.mol.write_mol2('hs',writestring=True)
+                # print(f"[ARCH] HS energy: {high_spin.energy:.4f}", flush=True)
             else:
                 error += 'high spin omol failed'
+                # print(f"[ARCH] HS failed", flush=True)
             if low_spin.successful and high_spin.successful:
-                output_dict['sco_kcal'] = np.abs((high_spin.energy - low_spin.energy) / (units.kcal/units.mol)) # absolut value minimizaion !
+                sco = np.abs((high_spin.energy - low_spin.energy) / (units.kcal/units.mol))
+                output_dict['sco_kcal'] = sco
+                # print(f"[ARCH] SCO energy: {sco:.4f} kcal/mol", flush=True)
 
     if good and len(task_dict.get('solvents',[])) > 0:
+        # print(f"[ARCH] Starting solvation calculations for {len(task_dict.get('solvents',[]))} solvents", flush=True)
         for solv in task_dict['solvents']:
-            if debug:
-                #print('Evaluating {} solvent'.format(solv), flush=True)
-                pass
-            
+            # print(f"[ARCH] Running XTB for {solv}...", flush=True)
+
             mol = CalcExecutor(arch_mol,
                 method='GFN2-xTB', xtb_solvent=solv,
                 relax=False, store_results=True)
@@ -104,8 +111,10 @@ def arch(lig, task_dict={
                 output_dict['{}_gsolv_eV'.format(solv)] = mol.results['gsolv_eV']
                 output_dict['{}_hl_gap_eV'.format(solv)] = mol.results['hl_gap_eV']
                 output_dict['{}_dipole'.format(solv)] = - np.linalg.norm(mol.results['dipole']).item() # Here minus for maximization!
+                # print(f"[ARCH] {solv} success: gsolv={mol.results['gsolv_eV']:.4f}, gap={mol.results['hl_gap_eV']:.4f}", flush=True)
             else:
                 error += '{} solvent failed XTB'.format(solv)
+                # print(f"[ARCH] {solv} failed", flush=True)
     if debug and error=='':
         print(f' [RANK rank - {lig['smiles']}] Success in {time.time()-time_init}', flush=True)
     elif debug and error !='':

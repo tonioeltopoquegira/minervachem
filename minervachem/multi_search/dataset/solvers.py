@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import time
 from ..utils_mpi import register_mpi_function
-from .qm9_toy.functions import E_at, zvpe, e_gap, C_v 
+from .qm9_toy.functions import E_at, zvpe, e_gap, C_v
 import csv
 import subprocess
 import json
@@ -12,6 +12,7 @@ from rdkit.Chem.Crippen import MolLogP
 from rdkit.Chem import RDConfig
 sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
 import sascorer
+import shutil
 
 
 def sascore(candidate):
@@ -99,7 +100,7 @@ def query(candidate, target=-1):
 def query_lig(candidate, target=-1, seed=42, timeout=2000):
 
     if target == -1:
-        target_from_arch = ARCH_FUNCT 
+        target_from_arch = ARCH_FUNCT
     else:
         target_from_arch = target
 
@@ -112,35 +113,50 @@ def query_lig(candidate, target=-1, seed=42, timeout=2000):
     # Collect corresponding functions
     res = [FUNCTIONS[t] for t in custom_targets]
 
+    # CHECK 
+    #candidate['functionalizations'] = ''
+
     # Prepare input data
     input_data = {'ligand': candidate, 'seed': seed}
     print(f'Running... {input_data}', flush=True)
 
     try:
         t = time.time()
+        # Get absolute path to the evaluation script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(script_dir, 'ligands_db', 'run_arch_script.py')
+
+        # Use the current Python executable (from conda environment)
+        python_exe = sys.executable
+
         proc = subprocess.run(
-            ['python', 'dataset/ligands_db/run_arch_script.py'],
+            [python_exe, script_path],
             input=json.dumps(input_data),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            cwd=os.path.dirname(script_path)
         )
 
-        # Always log raw output
-        #print(f"\n[RUN] Finished {input_data['ligand']['smiles']} in {time.time() - t:.2f}s")
-        #print("STDOUT:\n", proc.stdout.strip(), flush=True)
-        #print("STDERR:\n", proc.stderr.strip(), flush=True)
+        # # Debug logging 
+        # print(f"\n[RUN] Finished {input_data['ligand']['smiles']} in {time.time() - t:.2f}s", flush=True)
+        # if proc.stderr.strip():
+        #     print(f"[STDERR]:\n{proc.stderr.strip()}", flush=True)
 
         # Validate non-empty stdout
         if not proc.stdout.strip():
+            print(f"[ERROR] Empty stdout from subprocess. Python: {python_exe}, Script: {script_path}", flush=True)
+            if proc.returncode != 0:
+                print(f"[ERROR] Subprocess returned code {proc.returncode}", flush=True)
             raise ValueError("Empty stdout received from subprocess.")
 
         # Try to decode output
         try:
             out_dict = json.loads(proc.stdout)
         except json.JSONDecodeError as je:
-            print("JSON decode error:", je, flush=True)
+            # print("JSON decode error:", je, flush=True)
+            # print(f"Raw stdout: {proc.stdout[:200]}", flush=True)
             out_dict = {
                 "result": [None] * len(target_from_arch),
                 "success": False,
@@ -152,6 +168,16 @@ def query_lig(candidate, target=-1, seed=42, timeout=2000):
             out_dict['_timeout'] = False
             out_dict.setdefault('success', True)  # default to True if not set
             out_dict.setdefault('running_time', time.time() - t)
+
+            # Print captured debug output
+            if '_debug_stdout' in out_dict and out_dict['_debug_stdout'].strip():
+                print(f"[ARCH_DEBUG]\n{out_dict['_debug_stdout']}", flush=True)
+            if '_debug_stderr' in out_dict and out_dict['_debug_stderr'].strip():
+                print(f"[ARCH_DEBUG_STDERR]\n{out_dict['_debug_stderr']}", flush=True)
+
+            # Log if subprocess returned error
+            if not out_dict.get('success', True):
+                print(f"[ARCH_ERROR] {out_dict.get('error', 'Unknown error')}", flush=True)
 
     except subprocess.TimeoutExpired as e:
         #print(f"TIMEOUT for {input_data['ligand']['smiles']} after {timeout}s", flush=True)
@@ -191,7 +217,7 @@ def query_lig(candidate, target=-1, seed=42, timeout=2000):
         "seed": seed,
         "smiles": candidate['smiles'],
         "coordList": candidate['coordList'],
-        "functionalization": candidate.get('functionalization', []),
+        "functionalizations": candidate.get('functionalizations', []),
         "running_time": out_dict.get('running_time', None),
         "error": out_dict.get('error', ''),
         "_timeout": out_dict['_timeout'],
