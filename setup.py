@@ -29,7 +29,7 @@ setuptools.setup(
         "Topic :: Software Development :: Libraries",
     ],
     packages=setuptools.find_packages(),
-    python_requires='<3.12',
+    python_requires='<=3.12.13',
     install_requires=install_requires,
     extras_require={
         'mpi': ['mpi4py>=4.0.0']
