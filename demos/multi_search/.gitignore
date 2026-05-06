@@ -7,5 +7,3 @@ gen_*.png
 **/alphas_history.csv
 **/calibration_history.csv
 **/ood_models.csv
-**/candidates_success_extremes.csv
-**/mse_models.csv
